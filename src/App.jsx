@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Settings, User, Mic, CheckCircle2, ShieldCheck, 
   Info, Sparkles, Loader2, Volume2, X, Edit2, Trash2, 
-  Activity, ChevronLeft, Plus
+  Activity, ChevronLeft, Plus, PlayCircle
 } from 'lucide-react';
 
 export default function App() {
@@ -13,7 +13,7 @@ export default function App() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [scanStatus, setScanStatus] = useState("正在寻找面部..."); 
   
-  // 1. 数据持久化：用户资料 (从 localStorage 读取)
+  // 1. 数据持久化：用户资料 (防止丢失)
   const [userInfo, setUserInfo] = useState(() => {
     try {
       const saved = localStorage.getItem('longevity_user_info');
@@ -26,7 +26,7 @@ export default function App() {
     }
   });
 
-  // 1. 数据持久化：联系人 (从 localStorage 读取)
+  // 联系人持久化
   const [contacts, setContacts] = useState(() => {
     try {
       const saved = localStorage.getItem('longevity_contacts');
@@ -39,7 +39,7 @@ export default function App() {
     }
   });
 
-  // 监听数据变化并自动保存
+  // 监听变动自动保存
   useEffect(() => {
     localStorage.setItem('longevity_user_info', JSON.stringify(userInfo));
   }, [userInfo]);
@@ -54,11 +54,11 @@ export default function App() {
   // AI 相关状态
   const [aiAnalysis, setAiAnalysis] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [isTtsLoading, setIsTtsLoading] = useState(false);
+  const [isTtsPlaying, setIsTtsPlaying] = useState(false);
   const videoRef = useRef(null);
   const [cameraStream, setCameraStream] = useState(null);
 
-  // 评分细节定义
+  // 评分细节
   const scoreDetails = {
       breath: { score: 18, total: 20, label: "心肺气息", desc: "10秒呼吸采样完成" },
       face: { score: 19, total: 20, label: "面部气色", desc: "红润有光泽" },
@@ -70,14 +70,10 @@ export default function App() {
   // --- 摄像头控制 ---
   const startCamera = async () => {
       try {
-          if (cameraStream) {
-              cameraStream.getTracks().forEach(t => t.stop());
-          }
+          if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
           const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
           setCameraStream(stream);
-          if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-          }
+          if (videoRef.current) videoRef.current.srcObject = stream;
           setScanStatus("摄像头已就绪，识别中...");
       } catch (e) { 
           console.error("摄像头启动失败", e); 
@@ -109,7 +105,7 @@ export default function App() {
           interval = setInterval(() => {
               setProgress(p => {
                   if (p >= 100) return 100;
-                  // 5. 修改气息检测时长：从 +0.6 改为 +1，大约 10秒 (100ms * 100 = 10s)
+                  // 5. 气息检测调整为 10秒 (100ms * 100次 = 10s, 每次+1%)
                   if (stage === 'step1') return p + 1; 
                   if (stage === 'step4') return p + 0.8;
                   if (p > 60 && p < 62 && (stage === 'step2' || stage === 'step_tongue')) {
@@ -123,35 +119,41 @@ export default function App() {
       } else {
           stopCamera();
       }
-      return () => {
-          clearInterval(interval);
-      };
+      return () => clearInterval(interval);
   }, [stage]);
 
   useEffect(() => {
       if (progress >= 100) {
-          const nextMap = {
-              'step1': 'step2', 
-              'step2': 'step_tongue', 
-              'step_tongue': 'step4', 
-              'step4': 'summary'
-          };
+          const nextMap = { 'step1': 'step2', 'step2': 'step_tongue', 'step_tongue': 'step4', 'step4': 'summary' };
           const nextStage = nextMap[stage];
           if (nextStage) {
-              const timer = setTimeout(() => {
-                  setStage(nextStage);
-              }, 1000);
-              return () => clearTimeout(timer);
+              setTimeout(() => setStage(nextStage), 1000);
           }
       }
   }, [progress, stage]);
 
-  // --- AI 逻辑 (DeepSeek 后端中转) ---
+  // --- AI 语音合成 (TTS) ---
+  const playText = (text) => {
+      if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel(); // 停止之前的朗读
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = 'zh-CN'; 
+          utterance.rate = 0.9; // 语速稍慢
+          utterance.onstart = () => setIsTtsPlaying(true);
+          utterance.onend = () => setIsTtsPlaying(false);
+          window.speechSynthesis.speak(utterance);
+      }
+  };
+
+  // --- AI 逻辑 ---
   const runDeepSeek = async () => {
       setIsAiLoading(true);
       setAiAnalysis("");
+      
+      // 预先重置语音引擎，防止 iOS/Android 第一次播放失败
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+
       try {
-          // 调用后端 API，保护 Key
           const res = await fetch("/api/chat", {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -168,18 +170,13 @@ export default function App() {
           
           const text = d.choices[0].message.content;
           setAiAnalysis(text);
+          // 自动朗读
+          playText(text);
           
-          // 2. 修复语音朗读：强制使用中文，并在播放前取消之前的队列
-          if ('speechSynthesis' in window) {
-             window.speechSynthesis.cancel(); // 停止之前的朗读
-             const utterance = new SpeechSynthesisUtterance(text);
-             utterance.lang = 'zh-CN'; // 强制中文
-             utterance.rate = 0.9; // 语速稍慢，适合长辈
-             window.speechSynthesis.speak(utterance);
-          }
       } catch (e) { 
-          const fallback = "AI解析暂时不可用。但从指标看，您今天状态极佳。注意保持好心情！";
+          const fallback = "AI连接超时。但您的指标显示今天状态不错，记得按时吃药，保持心情愉快！";
           setAiAnalysis(fallback); 
+          playText(fallback);
       } finally { setIsAiLoading(false); }
   };
 
@@ -218,7 +215,6 @@ export default function App() {
                       福如东海阔<br/>寿比南山高<br/>岁岁常安康
                   </p>
               </div>
-              {/* 修改文案为 10秒 */}
               <p className="text-sm text-orange-400 animate-pulse font-medium mt-4">正在进行10秒肺功能声波采样...</p>
           </div>
           <div className="mt-auto mb-16"><div className="h-4 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-orange-500 transition-all duration-300" style={{width: `${progress}%`}}></div></div></div>
@@ -248,10 +244,10 @@ export default function App() {
               <div className="inline-block p-4 bg-emerald-100 rounded-full mb-2"><CheckCircle2 size={48} className="text-emerald-600" /></div>
               <h2 className="text-3xl font-black text-slate-800 tracking-tight">全维检测圆满完成</h2>
           </div>
+          {/* 1. 修复福寿指数显示：使用 font-bold 代替 font-black，防止字体加载失败 */}
           <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-[2.5rem] p-8 text-white shadow-2xl mb-8 relative overflow-hidden text-center">
               <p className="opacity-80 text-sm">{userInfo.name} 今日福寿指数</p>
-              {/* 1. 确保分数显示：healthScore 默认有值 */}
-              <div className="text-7xl font-black my-3 tracking-tighter">{healthScore}</div>
+              <div className="text-6xl font-bold my-4 tracking-tighter relative z-10">{healthScore}</div>
               <div className="inline-flex items-center gap-2 bg-white/20 px-4 py-1 rounded-full text-sm">
                   <ShieldCheck size={16} /> 身体状态：非常稳定
               </div>
@@ -290,7 +286,10 @@ export default function App() {
                           <div className="space-y-3 animate-fade-in">
                               <div className="flex justify-between items-center text-indigo-600 font-bold">
                                   <span className="flex items-center gap-2"><Sparkles size={16}/> AI 智能建议</span>
-                                  <Volume2 className={isTtsLoading ? "animate-pulse" : ""} />
+                                  {/* 手动播放按钮 */}
+                                  <button onClick={() => playText(aiAnalysis)} className="p-2 bg-indigo-100 rounded-full active:scale-90 transition-transform">
+                                      <Volume2 size={18} className={isTtsPlaying ? "animate-pulse text-indigo-600" : "text-indigo-400"} />
+                                  </button>
                               </div>
                               <p className="text-indigo-800 text-sm leading-relaxed italic">“{aiAnalysis}”</p>
                           </div>
@@ -328,11 +327,11 @@ export default function App() {
                           </label>
                       ))}
                   </div>
-                  {/* 4. 增加等级注释 */}
-                  <div className="flex justify-between text-[10px] text-slate-400 px-1 mt-1">
-                      <span>L1: 紧急 (自动拨打)</span>
-                      <span>L2: 重要 (强提醒)</span>
-                      <span>L3: 日常 (记录)</span>
+                  {/* 4. 增加守护人等级注释 */}
+                  <div className="flex justify-between text-[10px] text-slate-400 px-1">
+                      <span>L1: 紧急联系 (自动拨打)</span>
+                      <span>L2: 重要亲友 (强提醒)</span>
+                      <span>L3: 日常联系 (仅记录)</span>
                   </div>
               </div>
               <button className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg mt-2">保存守护信息</button>
