@@ -13,17 +13,41 @@ export default function App() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [scanStatus, setScanStatus] = useState("正在寻找面部..."); 
   
-  // 用户资料
-  const [userInfo, setUserInfo] = useState({
-      name: '王大爷', age: '75', height: '172', weight: '68', 
-      bloodType: 'A', medicalHistory: '高血压病史5年，规律服药'
+  // 1. 数据持久化：用户资料 (从 localStorage 读取)
+  const [userInfo, setUserInfo] = useState(() => {
+    try {
+      const saved = localStorage.getItem('longevity_user_info');
+      return saved ? JSON.parse(saved) : {
+        name: '王大爷', age: '75', height: '172', weight: '68', 
+        bloodType: 'A', medicalHistory: '高血压病史5年，规律服药'
+      };
+    } catch {
+      return { name: '王大爷', age: '75', height: '172', weight: '68', bloodType: 'A', medicalHistory: '高血压病史5年，规律服药' };
+    }
   });
 
-  // 联系人
-  const [contacts, setContacts] = useState([
-      { id: 1, name: '大儿子', phone: '13811112222', relation: '长子', priority: '3' },
-      { id: 2, name: '小女儿', phone: '13933334444', relation: '次女', priority: '2' }
-  ]);
+  // 1. 数据持久化：联系人 (从 localStorage 读取)
+  const [contacts, setContacts] = useState(() => {
+    try {
+      const saved = localStorage.getItem('longevity_contacts');
+      return saved ? JSON.parse(saved) : [
+        { id: 1, name: '大儿子', phone: '13811112222', relation: '长子', priority: '3' },
+        { id: 2, name: '小女儿', phone: '13933334444', relation: '次女', priority: '2' }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  // 监听数据变化并自动保存
+  useEffect(() => {
+    localStorage.setItem('longevity_user_info', JSON.stringify(userInfo));
+  }, [userInfo]);
+
+  useEffect(() => {
+    localStorage.setItem('longevity_contacts', JSON.stringify(contacts));
+  }, [contacts]);
+
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState(null);
 
@@ -36,7 +60,7 @@ export default function App() {
 
   // 评分细节定义
   const scoreDetails = {
-      breath: { score: 18, total: 20, label: "心肺气息", desc: "15秒呼吸采样完成" },
+      breath: { score: 18, total: 20, label: "心肺气息", desc: "10秒呼吸采样完成" },
       face: { score: 19, total: 20, label: "面部气色", desc: "红润有光泽" },
       tongue: { score: 17, total: 20, label: "舌象形态", desc: "舌苔薄白正常" },
       gait: { score: 20, total: 20, label: "步态分析", desc: "20步轨迹平稳" },
@@ -85,7 +109,8 @@ export default function App() {
           interval = setInterval(() => {
               setProgress(p => {
                   if (p >= 100) return 100;
-                  if (stage === 'step1') return p + 0.6; 
+                  // 5. 修改气息检测时长：从 +0.6 改为 +1，大约 10秒 (100ms * 100 = 10s)
+                  if (stage === 'step1') return p + 1; 
                   if (stage === 'step4') return p + 0.8;
                   if (p > 60 && p < 62 && (stage === 'step2' || stage === 'step_tongue')) {
                       setIsCapturing(true);
@@ -143,9 +168,13 @@ export default function App() {
           
           const text = d.choices[0].message.content;
           setAiAnalysis(text);
-          // 使用浏览器自带语音合成 (0成本)
+          
+          // 2. 修复语音朗读：强制使用中文，并在播放前取消之前的队列
           if ('speechSynthesis' in window) {
+             window.speechSynthesis.cancel(); // 停止之前的朗读
              const utterance = new SpeechSynthesisUtterance(text);
+             utterance.lang = 'zh-CN'; // 强制中文
+             utterance.rate = 0.9; // 语速稍慢，适合长辈
              window.speechSynthesis.speak(utterance);
           }
       } catch (e) { 
@@ -189,7 +218,8 @@ export default function App() {
                       福如东海阔<br/>寿比南山高<br/>岁岁常安康
                   </p>
               </div>
-              <p className="text-sm text-orange-400 animate-pulse font-medium mt-4">正在进行15秒肺功能声波采样...</p>
+              {/* 修改文案为 10秒 */}
+              <p className="text-sm text-orange-400 animate-pulse font-medium mt-4">正在进行10秒肺功能声波采样...</p>
           </div>
           <div className="mt-auto mb-16"><div className="h-4 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-orange-500 transition-all duration-300" style={{width: `${progress}%`}}></div></div></div>
       </div>
@@ -220,6 +250,7 @@ export default function App() {
           </div>
           <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-[2.5rem] p-8 text-white shadow-2xl mb-8 relative overflow-hidden text-center">
               <p className="opacity-80 text-sm">{userInfo.name} 今日福寿指数</p>
+              {/* 1. 确保分数显示：healthScore 默认有值 */}
               <div className="text-7xl font-black my-3 tracking-tighter">{healthScore}</div>
               <div className="inline-flex items-center gap-2 bg-white/20 px-4 py-1 rounded-full text-sm">
                   <ShieldCheck size={16} /> 身体状态：非常稳定
@@ -296,6 +327,12 @@ export default function App() {
                               <div className="p-3 text-center rounded-xl bg-slate-50 border-2 border-transparent peer-checked:border-emerald-500 peer-checked:text-emerald-700 peer-checked:bg-emerald-50 text-slate-400 font-bold transition-all text-sm">L{l}</div>
                           </label>
                       ))}
+                  </div>
+                  {/* 4. 增加等级注释 */}
+                  <div className="flex justify-between text-[10px] text-slate-400 px-1 mt-1">
+                      <span>L1: 紧急 (自动拨打)</span>
+                      <span>L2: 重要 (强提醒)</span>
+                      <span>L3: 日常 (记录)</span>
                   </div>
               </div>
               <button className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg mt-2">保存守护信息</button>
